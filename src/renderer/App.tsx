@@ -37,6 +37,7 @@ const App: React.FC = () => {
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueIndex, setQueueIndex] = useState<number>(-1);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [defaultFolder, setDefaultFolder] = useState<string | null>(null);
   const [current, setCurrent] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [position, setPosition] = useState(0);
@@ -292,13 +293,35 @@ const App: React.FC = () => {
     return Array.from(group.values()).sort((a, b) => a.artist.localeCompare(b.artist));
   }, [tracks]);
 
+  // Search helpers (accent/case-insensitive, token-based)
+  // defined after normalize() to avoid TDZ issues
+  const queryTokens = useMemo(() => normalize(query).split(' ').filter(Boolean), [query]);
   const filteredTracks = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return tracks;
-    return tracks.filter((t) =>
-      [t.title, t.artist, t.album].some((x) => (x || '').toLowerCase().includes(q))
-    );
-  }, [tracks, query]);
+    if (queryTokens.length === 0) return tracks;
+    return tracks.filter((t) => {
+      const hay = `${normalize(t.title)} ${normalize(t.artist)} ${normalize(t.album)}`;
+      return queryTokens.every((tk) => hay.includes(tk));
+    });
+  }, [tracks, queryTokens]);
+  const filteredAlbums = useMemo(() => {
+    if (queryTokens.length === 0) return albums;
+    return albums.filter((al) => {
+      const hay = `${normalize(al.album)} ${normalize(al.artist)}`;
+      return queryTokens.every((tk) => hay.includes(tk));
+    });
+  }, [albums, queryTokens]);
+  const filteredArtists = useMemo(() => {
+    if (queryTokens.length === 0) return artists;
+    return artists.filter((ar) => {
+      const hay = `${normalize(ar.artist)}`;
+      return queryTokens.every((tk) => hay.includes(tk));
+    });
+  }, [artists, queryTokens]);
+
+  // Debug: log filter results to verify search behavior
+  useEffect(() => {
+    console.log('[Search]', { q: query, tokens: queryTokens, tracks: filteredTracks.length });
+  }, [query, queryTokens, filteredTracks]);
 
   const startPlayback = async (t: Track) => {
     setCurrent(t);
@@ -359,12 +382,30 @@ const App: React.FC = () => {
     const list = await window.api.library.scanFolder(folder);
     setTracks(list);
     setNav('local_albums');
+    try {
+      localStorage.setItem('defaultMusicFolder', folder);
+      setDefaultFolder(folder);
+    } catch {}
   };
 
   const dummyLogin = async () => {
     await window.api.spotify.login();
     setNav('spotify');
   };
+
+  // Load default music folder on start (if present)
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('defaultMusicFolder');
+      if (stored) {
+        setDefaultFolder(stored);
+        window.api.library.scanFolder(stored).then((list) => {
+          setTracks(list);
+          setNav('local_albums');
+        }).catch(() => {});
+      }
+    } catch {}
+  }, []);
 
   // Basic keyboard shortcuts: Space to play/pause
   useEffect(() => {
@@ -394,23 +435,49 @@ const App: React.FC = () => {
           <div className="mt-2 text-xs uppercase tracking-wide text-neutral-400">Streaming</div>
           <button className={`text-left px-3 py-2 rounded hover:bg-neutral-800 ${nav === 'spotify' ? 'bg-neutral-800' : ''}`} onClick={dummyLogin}>Spotify</button>
 
-          <div className="mt-4">
+          <div className="mt-4 space-y-2">
             <button className="w-full bg-neutral-700 hover:bg-neutral-600 active:bg-neutral-500 text-neutral-100 px-3 py-2 rounded" onClick={openAndScan}>
-              Escanear carpeta…
+              Seleccionar carpeta…
             </button>
+            {defaultFolder ? (
+              <div className="text-xs text-neutral-400 break-all">
+                Carpeta predeterminada: {defaultFolder}
+                <div className="mt-2 flex gap-2">
+                  <button
+                    className="bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded"
+                    onClick={() => {
+                      window.api.library.scanFolder(defaultFolder).then((list) => setTracks(list));
+                    }}
+                  >
+                    Recargar
+                  </button>
+                  <button
+                    className="bg-neutral-800 hover:bg-neutral-700 px-2 py-1 rounded"
+                    onClick={() => {
+                      try { localStorage.removeItem('defaultMusicFolder'); } catch {}
+                      setDefaultFolder(null);
+                    }}
+                  >
+                    Olvidar
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </aside>
 
         {/* Content */}
         <main className="p-6 overflow-auto">
-          <div className="flex items-center gap-3 mb-6">
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar títulos, artistas, álbumes…"
-              className="w-full max-w-xl bg-neutral-900 border border-neutral-800 rounded px-3 py-2 outline-none focus:ring-2 focus:ring-neutral-600"
-            />
-          </div>
+          {nav === 'local_tracks' && (
+            <div className="flex items-center gap-3 mb-6">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Buscar pistas…"
+                className="w-full max-w-xl bg-neutral-900 border border-neutral-800 rounded px-3 py-2 outline-none focus:ring-2 focus:ring-neutral-600"
+              />
+            </div>
+          )}
           {nav === 'local_albums' && (
             <section>
               <h2 className="text-xl font-semibold mb-4">Álbumes</h2>
